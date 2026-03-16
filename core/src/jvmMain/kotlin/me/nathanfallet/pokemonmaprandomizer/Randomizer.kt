@@ -27,7 +27,7 @@ import kotlin.random.Random
  *  5. Load warps, dictionary, blocks
  *  6. MapRandomizer.randomize(seed) — retry with seed+1 if null
  *  7. WarpWriter.write() for each event data file
- *  8. Repack NARC, recompress ARM9, rebuild NDS
+ *  8. Repack NARC, rebuild NDS (ARM9 kept decompressed, matching C++ ndstool behaviour)
  *  9. Return output ROM bytes + log string
  */
 class Randomizer {
@@ -110,9 +110,8 @@ class Randomizer {
             WarpWriter.write(fileBytes, result.warps, game)
         }
 
-        // ---- 8. Repack NARC, recompress ARM9, rebuild NDS ------------------
+        // ---- 8. Repack NARC, rebuild NDS (ARM9 stays decompressed, like C++ ndstool) --
         val newNarc = NarcArchive.pack(updatedEventFiles)
-        val arm9Recompressed = BlzCodec.compress(arm9Patched, arm9 = true)
 
         // Also replace scr_seq.narc if present
         val scrSeqNarc = resBytes("scr_seq.narc")
@@ -122,7 +121,7 @@ class Randomizer {
         }
 
         val finalNds = nds
-            .withArm9(arm9Recompressed)
+            .withArm9(arm9Patched)
             .withFiles(
                 buildMap {
                     put(narcPath, newNarc)

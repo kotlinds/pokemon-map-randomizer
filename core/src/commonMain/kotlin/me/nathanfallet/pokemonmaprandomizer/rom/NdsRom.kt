@@ -34,6 +34,8 @@ class NdsRom private constructor(
     /** FAT entries for file IDs that are NOT part of the virtual filesystem
      *  (e.g. overlay files are stored as FAT entries but accessed via the overlay table). */
     private val otherFatEntries: Map<Int, ByteArray>,
+    /** Bytes between end of header (0x200) and start of ARM9 — the NDS secure area. */
+    private val preArm9Data: ByteArray,
 ) {
 
     // -------------------------------------------------------------------------
@@ -60,7 +62,8 @@ class NdsRom private constructor(
      *
      * Layout:
      *   0x000  header (512 B)
-     *   …      ARM9 (aligned to 4 B, but placed at original or first available ≥ 0x200 position)
+     *   0x200  pre-ARM9 region (secure area — preserved verbatim)
+     *   …      ARM9  (at original arm9Off, same as original ROM)
      *   …      ARM7
      *   …      FNT
      *   …      FAT  (rebuilt with new file offsets)
@@ -77,32 +80,12 @@ class NdsRom private constructor(
             putAll(otherFatEntries)
         }
 
-        // We'll fill in sections sequentially, keeping a running cursor
-        val out = mutableListOf<ByteArray>()
-
-        fun align4(current: Int): Int = (current + 3) and -4
-        fun appendPadded(bytes: ByteArray): Int {
-            out.add(bytes)
-            val padLen = align4(bytes.size) - bytes.size
-            if (padLen > 0) out.add(ByteArray(padLen))
-            return align4(bytes.size)
-        }
-
-        // ---- header placeholder (updated at the end) ----
-        val headerPlaceholder = rawHeader.copyOf()
-        out.add(headerPlaceholder)   // index 0, 512 bytes
-
-        // ---- ARM9 ----
-        val arm9Start = 0x200   // conventional start
-        repeat(arm9Start - 0x200) { }   // header already adds 512
-        val arm9Section = ByteArray(arm9Start - 0x200) + arm9
-
-        // Simpler: track absolute cursor
         data class Section(val offset: Int, val data: ByteArray)
 
         val sections = mutableListOf<Section>()
         var cursor = 0
 
+        fun align4(current: Int): Int = (current + 3) and -4
         fun place(bytes: ByteArray): Int {
             val off = cursor
             sections.add(Section(off, bytes))
@@ -110,14 +93,17 @@ class NdsRom private constructor(
             return off
         }
 
-        // header
+        // header placeholder (updated at the end)
+        val headerPlaceholder = rawHeader.copyOf()
         val hdrOff = place(headerPlaceholder); check(hdrOff == 0)
 
-        // ARM9 must be at least at 0x200
-        if (cursor < 0x200) {
-            val gap = ByteArray(0x200 - cursor)
-            place(gap)
+        // Restore secure area (0x200..arm9Off-1) exactly as parsed
+        if (preArm9Data.isNotEmpty()) {
+            place(preArm9Data)
+        } else if (cursor < 0x200) {
+            place(ByteArray(0x200 - cursor))
         }
+
         val newArm9Off = place(arm9)
         val newArm7Off = place(arm7)
         val newFntOff = place(fntBytes)
@@ -161,6 +147,11 @@ class NdsRom private constructor(
         writeU32(newHeader, 0x068, newBannerOff.toLong())
         writeU32(newHeader, 0x080, cursor.toLong())          // total used ROM size
 
+        // Recompute header CRC16 (NDS spec: CRC16 over bytes 0x000..0x15D, stored at 0x15E)
+        val headerCrc = crc16(newHeader, 0, 0x15E)
+        newHeader[0x15E] = (headerCrc and 0xFF).toByte()
+        newHeader[0x15F] = ((headerCrc ushr 8) and 0xFF).toByte()
+
         // Assemble output
         val result = ByteArray(cursor)
         for (sec in sections) {
@@ -183,7 +174,7 @@ class NdsRom private constructor(
     ) = NdsRom(
         rawHeader, arm9, arm7,
         arm9OverlayTable, arm7OverlayTable,
-        banner, files, fntBytes, pathToFileId, otherFatEntries,
+        banner, files, fntBytes, pathToFileId, otherFatEntries, preArm9Data,
     )
 
     // -------------------------------------------------------------------------
@@ -212,6 +203,9 @@ class NdsRom private constructor(
             val ovl7Off = u32(0x058);
             val ovl7Size = u32(0x05C)
             val bannerOff = u32(0x068)
+
+            // Preserve bytes between end of header (0x200) and arm9Off (NDS secure area)
+            val preArm9Data = if (arm9Off > 0x200) data.copyOfRange(0x200, arm9Off) else ByteArray(0)
 
             val arm9 = data.copyOfRange(arm9Off, arm9Off + arm9Size)
             val arm7 = data.copyOfRange(arm7Off, arm7Off + arm7Size)
@@ -256,7 +250,7 @@ class NdsRom private constructor(
             return NdsRom(
                 header, arm9, arm7,
                 arm9OvlTable, arm7OvlTable,
-                banner, files, fntBytes, pathToFileId, otherFatEntries,
+                banner, files, fntBytes, pathToFileId, otherFatEntries, preArm9Data,
             )
         }
 
@@ -328,6 +322,18 @@ class NdsRom private constructor(
             buf[offset + 1] = (value.ushr(8) and 0xFF).toByte()
             buf[offset + 2] = (value.ushr(16) and 0xFF).toByte()
             buf[offset + 3] = (value.ushr(24) and 0xFF).toByte()
+        }
+
+        /** NDS header CRC16: poly 0x8005, init 0xFFFF, over buf[0..<len]. */
+        internal fun crc16(buf: ByteArray, offset: Int, len: Int): Int {
+            var crc = 0xFFFF
+            repeat(len) { i ->
+                crc = crc xor (buf[offset + i].toInt() and 0xFF)
+                repeat(8) {
+                    crc = if (crc and 1 != 0) (crc ushr 1) xor 0xA001 else crc ushr 1
+                }
+            }
+            return crc and 0xFFFF
         }
     }
 }
