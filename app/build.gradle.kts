@@ -5,6 +5,9 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.composeHotReload)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.kover)
+    alias(libs.plugins.maven)
 }
 
 kotlin {
@@ -41,7 +44,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "me.nathanfallet.pokemonmaprandomizer"
-            packageVersion = "1.0.0"
+            packageVersion = project.version.toString()
         }
     }
 }

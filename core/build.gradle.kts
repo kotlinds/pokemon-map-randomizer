@@ -1,5 +1,8 @@
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.kover)
+    alias(libs.plugins.maven)
 }
 
 kotlin {
